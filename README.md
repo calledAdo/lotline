@@ -13,7 +13,7 @@ npm install
 npm run demo
 ```
 
-No `.env`, Docker, Zetaris or Nightshift account is needed. DuckDB reads the included files, the real agents execute, and recorded model replies replay only when the entire request hash matches. Unrecorded or invalid replies use labelled deterministic fallbacks. The demo starts an ephemeral `riverside-sample` world each time and prints the HTML packet and index paths under `runs/`. Open either file directly in a browser; there are no external assets or scripts. Timing and clean-install evidence are in [the verification report](briefs/codex-hardening-2-report.md).
+No `.env`, Docker, Zetaris or Nightshift account is needed. DuckDB reads the included files, the real agents execute, and recorded model replies replay only when the entire request hash matches. Unrecorded or invalid replies use labelled deterministic fallbacks. The demo starts an ephemeral `riverside-sample` world each time and prints the HTML packet and index paths under `runs/`. Open either file directly in a browser; there are no external assets or scripts.
 
 The Naropin case has two affected lot rows and one expiry discrepancy requiring a label check: 68 unexpired units quarantined, 143 → 75 usable units, and 16.6 → 8.7 days of supply. A pharmacist must resolve the discrepancy and review substitutions. “Approved” means the automated critic's result, never clinical authorization.
 
@@ -132,7 +132,7 @@ SAMPLE_MODE=true npx tsx eval/run-exposure.ts
 npx tsx scripts/check-parity.ts  # requires live Zetaris, no model calls
 ```
 
-The exposure key contains 21 labelled anchor rows; the offline evaluation scores 21/21. Recordings cover six live anchors and one watch drill. Replay executes real DuckDB queries and matches complete model-request hashes. See [verification evidence](briefs/validation/hardening-2/) and the [report](briefs/codex-hardening-2-report.md) for commands and outputs.
+The exposure key contains 21 labelled anchor rows; the offline evaluation scores 21/21. Recordings cover six live anchors and one watch drill. Replay executes real DuckDB queries and matches complete model-request hashes. Run the commands above to reproduce every figure; the live critic ablation results are in [eval/results/](eval/results/).
 
 The live critic ablation completed in 14.33 minutes: **230/230 lot verdicts in each arm**, zero wrongly quarantined or missed recalled units, one coverage dispute (dextrose 70%) resolved by Ultra, two adjudications and eight objections. **No lot-verdict accuracy improvement was demonstrated.** Ultra added 658,441 ms of model time; the baseline used 183,405 ms.
 
