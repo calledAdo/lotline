@@ -1,0 +1,14 @@
+Lotline World Model engine
+
+Derived from the Meterless World Model reference implementation
+(https://github.com/Meterless/Meterless, engines/world-model/reference, Apache License 2.0),
+at the upstream commit recorded in UPSTREAM_COMMIT.
+
+Changes made for Lotline (October 2026):
+- store.ts: durable append-only JSON Lines event log with crash-tolerant replay, replacing
+  the rewrite-whole-file JSON persistence.
+- index.ts / store.ts: fact conflict resolution is recorded in the assertFact event, so a
+  replayed world equals the live one.
+- claims.ts (new): a truth-maintenance layer. Agent claims record the exact evidence rows
+  (with content hashes) and upstream claims they depend on; staleness is derived on read.
+- conformance/runner.ts is the unmodified upstream conformance suite.

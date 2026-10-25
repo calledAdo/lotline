@@ -1,0 +1,7 @@
+{"location_code":"MAIN","name":"Central Pharmacy","kind":"pharmacy"}
+{"location_code":"OR","name":"Operating Room Satellite Pharmacy","kind":"satellite"}
+{"location_code":"LD","name":"Labor and Delivery Dispensing Cabinet","kind":"cabinet"}
+{"location_code":"ED","name":"Emergency Department Dispensing Cabinet","kind":"cabinet"}
+{"location_code":"ED-CART","name":"Emergency Department Crash Carts","kind":"crash_cart"}
+{"location_code":"ICU","name":"Intensive Care Unit Dispensing Cabinet","kind":"cabinet"}
+{"location_code":"TPN","name":"Central Pharmacy Sterile Compounding (TPN)","kind":"compounding"}

@@ -1,0 +1,111 @@
+{
+  "source": "openFDA (U.S. Food and Drug Administration)",
+  "license": "Public domain / CC0, https://open.fda.gov/license/",
+  "disclaimer": "openFDA data is unvalidated and must not be relied on for medical care decisions.",
+  "fetched_at": "2026-10-24T19:22:28.706Z",
+  "molecules": [
+    "ropivacaine",
+    "dextrose",
+    "ketorolac",
+    "sodium bicarbonate",
+    "furosemide",
+    "clindamycin"
+  ],
+  "counts": {
+    "recalls": 615,
+    "shortage_rows": 227,
+    "ndc_packages": 2350
+  },
+  "queries": [
+    {
+      "molecule": "ropivacaine",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22ropivacaine%22+product_description:%22ropivacaine%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 54
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22ropivacaine%22&limit=100&skip=0",
+        "total": 49
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22ropivacaine%22+AND+finished:true&limit=100&skip=0",
+        "total": 80
+      }
+    },
+    {
+      "molecule": "dextrose",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22dextrose%22+product_description:%22dextrose%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 342
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22dextrose%22&limit=100&skip=0",
+        "total": 76
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22dextrose%22+AND+finished:true&limit=100&skip=0",
+        "total": 360
+      }
+    },
+    {
+      "molecule": "ketorolac",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22ketorolac%22+product_description:%22ketorolac%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 58
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22ketorolac%22&limit=100&skip=0",
+        "total": 26
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22ketorolac%22+AND+finished:true&limit=100&skip=0",
+        "total": 195
+      }
+    },
+    {
+      "molecule": "sodium bicarbonate",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22sodium+bicarbonate%22+product_description:%22sodium+bicarbonate%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 110
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22sodium+bicarbonate%22&limit=100&skip=0",
+        "total": 15
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22sodium+bicarbonate%22+AND+finished:true&limit=100&skip=0",
+        "total": 241
+      }
+    },
+    {
+      "molecule": "furosemide",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22furosemide%22+product_description:%22furosemide%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 14
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22furosemide%22&limit=100&skip=0",
+        "total": 33
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22furosemide%22+AND+finished:true&limit=100&skip=0",
+        "total": 222
+      }
+    },
+    {
+      "molecule": "clindamycin",
+      "enforcement": {
+        "url": "https://api.fda.gov/drug/enforcement.json?search=openfda.generic_name:%22clindamycin%22+product_description:%22clindamycin%22&limit=100&skip=0&sort=report_date:desc",
+        "total": 50
+      },
+      "shortages": {
+        "url": "https://api.fda.gov/drug/shortages.json?search=generic_name:%22clindamycin%22&limit=100&skip=0",
+        "total": 28
+      },
+      "ndc": {
+        "url": "https://api.fda.gov/drug/ndc.json?search=generic_name:%22clindamycin%22+AND+finished:true&limit=100&skip=0",
+        "total": 256
+      }
+    }
+  ]
+}

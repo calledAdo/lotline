@@ -1,0 +1,33 @@
+{
+  "name": "lotline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Recall-to-supply desk for hospital pharmacies: a multi-agent system over fragmented data (Zetaris), Meterless World Model, Nightshift + NVIDIA Nemotron.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p engines/world-model",
+    "test": "node --import tsx --test test/*.test.ts",
+    "data:fetch": "tsx scripts/fetch-openfda.ts",
+    "data:seed": "tsx scripts/seed-hospital.ts",
+    "data:upload": "tsx scripts/upload-objects.ts",
+    "setup:zetaris": "node scripts/zsql.mjs -f scripts/register_zetaris_sources.sql",
+    "engine:conformance": "WORLD_MODEL_IMPL=$PWD/engines/world-model/src/index.ts tsx engines/world-model/conformance/runner.ts",
+    "lotline": "tsx src/cli.ts",
+    "demo": "SAMPLE_MODE=true tsx src/cli.ts run D-0727-2026 --ephemeral"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.12",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.913.0",
+    "@duckdb/node-api": "^1.4.5-r.1",
+    "pg": "^8.16.3"
+  }
+}
