@@ -50,7 +50,7 @@ Code independently enforces product scope, exact lot matching, arithmetic, alter
 
 ## Measured critic ablation
 
-The archived live experiment on **2026-10-25** (artifact commit `2cb80bd`; execution source commit not recorded) completed ten paired cases in **736,466 ms (12.27 minutes)**: six real anchors and four real different-product/compounded traps. Both arms run the same agents against identical frozen DuckDB data. Lightning responses are generated live once and shared within each pair to control worker sampling; the treatment adds live Ultra and revision. Reporter prose is excluded from scoring. Labels never enter prompts.
+The live experiment on **2026-10-25** completed ten paired cases in **14.33 minutes**: six real anchors and four real different-product/compounded traps. Both arms run the same agents against identical frozen DuckDB data. Lightning responses are generated live once and shared within each pair to control worker sampling; the treatment adds live Ultra and revision. Reporter prose is excluded from scoring. Labels never enter prompts.
 
 | Metric | Lightning + code | Plus Ultra |
 |---|---:|---:|
@@ -58,19 +58,19 @@ The archived live experiment on **2026-10-25** (artifact commit `2cb80bd`; execu
 | Correct original anchor-key verdicts | 21/21 | 21/21 |
 | Wrongly quarantined units | 0 | 0 |
 | Missed recalled units | 0 | 0 |
-| Coverage disputes raised | 3 | 3 |
-| Coverage disputes resolved | 0 | 3 |
-| Adjudications | 0 | 4 |
+| Coverage disputes raised | 1 | 1 |
+| Coverage disputes resolved | 0 | 1 |
+| Adjudications | 0 | 2 |
 | Objections / overruled objections | 0 / 0 | 8 / 0 |
-| Final escalations | 3 | 14 |
-| Logical response uses | 37 | 60 |
-| Physical HTTP attempts | 37 | 14 |
-| HTTP time, including failed attempts | 128,799 ms | 592,897 ms |
-| Total arm wall time | 134,448 ms | 600,439 ms |
+| Final escalations | 3 | 17 |
+| Logical response uses | 38 | 54 |
+| Physical HTTP attempts | 38 | 13 |
+| Model time, including failed attempts | 183,405 ms | 658,441 ms |
+| Total arm wall time | 189,680 ms | 668,235 ms |
 
-**Ultra did not improve lot-verdict accuracy in this run.** It resolved three code/model coverage disputes (Naropin 30 mL, dextrose, and the QuVa combination trap) and declined a 500 mL dextrose alternative for a recalled 2,000 mL presentation. It also raised container/clinical workflow cautions. These recommendations were not clinically adjudicated by this evaluation, so they are observations, not demonstrated clinical benefit. One Ultra request timed out and recovered on retry. The treatment's HTTP count is incremental because 46 response uses were shared/cached; it is not a standalone cost comparison.
+**Ultra did not improve lot-verdict accuracy in this run.** The fast worker read the recalled dextrose 70% bag as not covered; the NDC rule read it as covered, and Ultra resolved the dispute as covered, citing the NDC the recall names. Ultra also declined to order the 500 mL dextrose alternative for a recalled 2,000 mL presentation because the only volume-matched product is not orderable, and raised container and workflow cautions. These recommendations were not clinically adjudicated by this evaluation, so they are observations, not demonstrated clinical benefit. Two Ultra requests timed out and recovered on retry. For the QuVa combination recall the fast lot reader returned no valid reply after repair and the labelled deterministic reader was used. The treatment's HTTP count is incremental because worker replies are shared within each pair; it is not a standalone cost comparison.
 
-All failures (none for lot verdicts), disputes, resolutions, objections, escalation text and receipts are in `eval/results/ablation-2026-10-25.json` and `.md`. Many of the 230 pairs are true negatives, which is why the 21 original labelled rows are also reported. This selected ten-case study cannot establish general safety or efficacy. No prompt was tuned against the labels. The archived measurements apply to the recorded experiment; they are not a measurement of the working tree.
+All failures (none for lot verdicts), disputes, resolutions, objections, escalation text and receipts are in `eval/results/ablation-2026-10-25.json` and `.md`. Many of the 230 pairs are true negatives, which is why the 21 original labelled rows are also reported. This selected ten-case study cannot establish general safety or efficacy. No prompt was tuned against the labels.
 
 ## Reproduce the judge path
 
@@ -82,6 +82,6 @@ npm test
 npm run engine:conformance
 ```
 
-The demo needs no credentials. Promoted recordings are model replies, not saved packets or SQL results: DuckDB and the real agents produce the packet on every run. The archived six-anchor and watch replay artifacts are recorded at commit `2cb80bd`. Investigative requests replay by exact hash; unmatched briefing inputs use the explicitly labelled summary template. The self-contained HTML shows the buyer checklist first and all evidence, SQL and provider receipts below it, including watch diffs and a sweep index.
+The demo needs no credentials. Promoted recordings are model replies, not saved packets or SQL results: DuckDB and the real agents produce the packet on every run. The six-anchor and watch recordings are in `data/cassettes/`. Investigative requests replay by exact hash; unmatched briefing inputs use the explicitly labelled summary template. The self-contained HTML shows the buyer checklist first and all evidence, SQL and provider receipts below it, including watch diffs and a sweep index.
 
 This implementation does not include H-MEM, Iceberg writeback, a purchasing connector, or autonomous clinical authorization. The watcher polls dependencies of worked cases; it is not a continuous subscription or an atomic cross-source snapshot. openFDA is public domain/CC0 and unvalidated; synthetic fixtures contain no patient information. These limits and the precise validation outputs are recorded in `briefs/codex-hardening-2-report.md`.

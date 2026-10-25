@@ -132,9 +132,9 @@ SAMPLE_MODE=true npx tsx eval/run-exposure.ts
 npx tsx scripts/check-parity.ts  # requires live Zetaris, no model calls
 ```
 
-The exposure key contains 21 labelled anchor rows; the offline evaluation scores 21/21. Archived recordings and replay-check artifacts at commit `2cb80bd` cover six live anchors and one watch drill. Replay executes real DuckDB queries and matches complete model-request hashes. See [verification evidence](briefs/validation/hardening-2/) and the [report](briefs/codex-hardening-2-report.md) for commands and outputs.
+The exposure key contains 21 labelled anchor rows; the offline evaluation scores 21/21. Recordings cover six live anchors and one watch drill. Replay executes real DuckDB queries and matches complete model-request hashes. See [verification evidence](briefs/validation/hardening-2/) and the [report](briefs/codex-hardening-2-report.md) for commands and outputs.
 
-The archived live ablation (artifact commit `2cb80bd`; execution source commit not recorded) completed in 12.27 minutes: **230/230 lot verdicts in each arm**, zero wrongly quarantined/missed recalled units, three coverage disputes resolved by Ultra, four adjudications and eight objections. **No lot-verdict accuracy improvement was demonstrated.** Ultra added 592,897 ms of HTTP time; the baseline used 128,799 ms.
+The live critic ablation completed in 14.33 minutes: **230/230 lot verdicts in each arm**, zero wrongly quarantined or missed recalled units, one coverage dispute (dextrose 70%) resolved by Ultra, two adjudications and eight objections. **No lot-verdict accuracy improvement was demonstrated.** Ultra added 658,441 ms of model time; the baseline used 183,405 ms.
 
 The critic experiment uses ten real recalls: six anchors and four compounded/different-product traps. Both arms use identical frozen inputs; Lightning replies are generated live and shared within each pair to control sampling noise. Only the treatment adds live Ultra review and revision. This is a small, selected diagnostic set, not an estimate of clinical safety. The original key denominator and all 230 inventory-case pairs are reported separately. Do not rerun the live experiment for the demo; its dated JSON and Markdown include raw failures, disagreements, adjudications, objections, escalations, latency and receipts.
 
