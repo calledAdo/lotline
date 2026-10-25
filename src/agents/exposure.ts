@@ -1,3 +1,4 @@
+import { forAgent } from "../context.ts";
 // Exposure Investigator: which of our products does this recall cover, and which lots,
 // where? Two independent readings of coverage are taken: the fast-lane model reads the
 // recall the way a pharmacist would, and code matches the recall's NDCs against our item
@@ -5,24 +6,27 @@
 // Agreement is high confidence; disagreement is marked disputed for the Critic. Lot
 // matching itself is exact and deterministic: a model never decides two lot numbers match.
 import { chatJson, LlmUnavailable } from "../llm.ts";
-import { asText, ident, inList, ndcExpr } from "../data/dialect.ts";
+import { asText, ident, inList, ndcExpr, type NdcTransform } from "../data/dialect.ts";
 import { evidence, type RunContext } from "../context.ts";
 import { format11, ndcsInText, normalize, toNdc11 } from "../ndc.ts";
 import { editDistance, expiryLabel, lotInText, parseExpiry, readLots, sameMonth, strengthInconsistencies, type LotConstraint } from "../recall-text.ts";
 import type { Coverage, CoverageDecision, Exposure, Item, LotFinding, LotRow, Recall } from "../domain.ts";
 import type { Crosswalk } from "./cartographer.ts";
 
+import { itemEvidenceRow, lotEvidenceRow, queryEvidence } from "../evidence.ts";
+
 const AGENT = "exposure";
 
 /** The recall as it stands now: the FDA record, overlaid with the latest revision in the change feed. */
-export async function loadRecall(ctx: RunContext, recallNumber: string): Promise<Recall | null> {
+export async function loadRecall(ctx: RunContext, recallNumber: string, agent = AGENT): Promise<Recall | null> {
+  ctx = forAgent(ctx, agent);
   const rn = recallNumber.replace(/[^A-Za-z0-9-]/g, "");
   const cols = "recall_number, status, classification, recalling_firm, reason_for_recall, product_description, code_info, report_date, openfda_package_ndc, text_ndcs";
-  const rows = await ctx.backend.query(`SELECT ${cols} FROM fda_snapshot.recalls WHERE recall_number = '${rn}'`, { agent: AGENT, purpose: `read recall ${recallNumber}`, trace: ctx.trace });
+  const rows = await ctx.backend.query(`SELECT ${cols} FROM fda_snapshot.recalls WHERE recall_number = '${rn}'`, { agent, purpose: `read recall ${recallNumber}`, trace: ctx.trace });
   const base = (rows[0] as unknown as Recall) ?? null;
   if (!base) return null;
   const d = ctx.backend.dialect;
-  const updates = await ctx.backend.query(`SELECT ${asText(d, "update_seq")} AS update_seq, update_date, update_kind, product_description, code_info, classification, status, ${asText(d, "drill")} AS drill, note FROM fda_updates.recall_updates WHERE recall_number = '${rn}'`, { agent: AGENT, purpose: `check the change feed for revisions to ${recallNumber}`, trace: ctx.trace }).catch(() => []);
+  const updates = await ctx.backend.query(`SELECT ${asText(d, "update_seq")} AS update_seq, update_date, update_kind, product_description, code_info, classification, status, ${asText(d, "drill")} AS drill, note FROM fda_updates.recall_updates WHERE recall_number = '${rn}'`, { agent, purpose: `check the change feed for revisions to ${recallNumber}`, trace: ctx.trace });
   const latest = updates.sort((a, b) => Number(b.update_seq) - Number(a.update_seq))[0];
   if (!latest) return base;
   const label = `revision ${latest.update_seq} (${latest.update_kind}, ${latest.update_date})${latest.drill === "true" ? " DRILL" : ""}`;
@@ -31,9 +35,10 @@ export async function loadRecall(ctx: RunContext, recallNumber: string): Promise
 }
 
 /** The recall fields an exposure claim depends on. Shared with the watcher, so both hash the same thing. */
-export const recallEvidenceRow = (r: Recall) => ({ product_description: r.product_description, code_info: r.code_info, classification: r.classification, status: r.status });
+export const recallEvidenceRow = (r: Recall) => ({ product_description: r.product_description, code_info: r.code_info, classification: r.classification, status: r.status, recalling_firm: r.recalling_firm, openfda_package_ndc: r.openfda_package_ndc, reason_for_recall: r.reason_for_recall, report_date: r.report_date });
 
 export async function loadItems(ctx: RunContext, crosswalk: Crosswalk): Promise<Item[]> {
+  ctx = forAgent(ctx, AGENT);
   const items = await ctx.backend.query(`SELECT item_id, ndc11, description, generic_name, strength, dosage_form, route, manufacturer, unit_of_issue, units_per_pack FROM hospital.item_master`, { agent: AGENT, purpose: "read the hospital item master", trace: ctx.trace });
   const pkgMap = crosswalk.mappings.find(m => m.table === "fda_snapshot.ndc_packages");
   const packages = pkgMap
@@ -101,6 +106,7 @@ function validateLots(codeInfo: string) {
  *   physical check). The Critic can only make a lot outcome more conservative, never less.
  */
 export async function investigate(ctx: RunContext, recall: Recall, items: Item[], adjudications: Map<string, { decision: CoverageDecision; reason: string }> = new Map(), lotOverrides: Map<string, string> = new Map()): Promise<Exposure> {
+  ctx = forAgent(ctx, AGENT);
   ctx.trace.emit("agent-start", AGENT, `investigating ${recall.recall_number} (${recall.classification}, ${recall.recalling_firm})`);
   const recallEvidence = await evidence(ctx, AGENT, "fda_snapshot.recalls", recall.recall_number, recallEvidenceRow(recall));
   const dataIssues = strengthInconsistencies(recall.product_description).map(s => `FDA recall text is internally inconsistent: "${s.statement}" (${s.computed} mg/mL by arithmetic, ${s.stated} mg/mL stated)`);
@@ -134,10 +140,36 @@ export async function investigate(ctx: RunContext, recall: Recall, items: Item[]
   }
 
   const itemEvidence = new Map<string, string>();
-  for (const i of candidates) itemEvidence.set(i.item_id, await evidence(ctx, AGENT, "hospital.item_master", i.item_id, { ndc11: i.ndc11, description: i.description, strength: i.strength, unit_ndcs: i.unitNdcs }));
+  for (const i of candidates) itemEvidence.set(i.item_id, await evidence(ctx, AGENT, "hospital.item_master", i.item_id, itemEvidenceRow(i as unknown as Record<string, unknown>)));
 
+  const packageMapping = ctx.tm.claims({ kind: "code-mapping", subject: "fda_snapshot.ndc_packages" })[0]?.value as { column: string; transform: NdcTransform } | undefined;
+  const packageCode = ndcExpr(ctx.backend.dialect, ident(packageMapping?.column ?? "package_ndc"), packageMapping?.transform ?? "segments_to_11");
+
+  // Enumeration evidence covers new items/packages/lots as well as deleted rows.
+  const scopeEvidence: string[] = [];
+  for (const table of ["hospital.item_master", "fda_snapshot.ndc_packages", "hospital.inventory_lots"]) {
+    const sql = table === "fda_snapshot.ndc_packages"
+      ? `SELECT package_ndc, package_description FROM ${table} WHERE ${packageCode} IN (${inList(items.map(i => i.ndc11))})`
+      : table === "hospital.item_master" ? `SELECT item_id, ndc11, generic_name FROM ${table}` : `SELECT lot_row_id, item_id, lot_number FROM ${table}`;
+    const rows = await ctx.backend.query(sql, { agent: AGENT, purpose: "observe case input membership", trace: ctx.trace });
+    // Item/package membership decides which products qualify as candidates; inventory
+    // membership is narrowed to candidate items or explicitly named recall lots.
+    const filteredSql = table === "hospital.inventory_lots"
+      ? `${sql} WHERE item_id IN (${inList(candidates.map(i => i.item_id))}) OR lot_number IN (${inList(readLots(recall.code_info ?? "").map(l => l.lot))})`
+      : sql;
+    const selected = table === "hospital.inventory_lots" ? rows.filter(r => candidates.some(i => i.item_id === r.item_id) || readLots(recall.code_info ?? "").some(l => l.lot === r.lot_number)) : rows;
+    scopeEvidence.push(await queryEvidence(ctx, AGENT, table, filteredSql, selected));
+  }
+  await ctx.tm.assertClaim({
+    key: `inputs:${recall.recall_number}`, kind: "case-inputs", subject: recall.recall_number,
+    statement: `Candidate product and lot membership for ${recall.recall_number}`,
+    evidence: scopeEvidence, confidence: 1, producedBy: AGENT, source: ctx.by(AGENT),
+  });
   const coverage: Coverage[] = [];
   for (const i of candidates) {
+    const packageSql = `SELECT package_ndc, package_description FROM fda_snapshot.ndc_packages WHERE ${packageCode} = '${i.ndc11}'`;
+    const packageRows = await ctx.backend.query(packageSql, { agent: AGENT, purpose: "observe product package hierarchy", trace: ctx.trace });
+    const packageEvidence = await queryEvidence(ctx, AGENT, "fda_snapshot.ndc_packages", packageSql, packageRows);
     const rule = rules.get(i.item_id)!;
     const m = model?.get(i.item_id) ?? null;
     const adjudicated = adjudications.get(i.item_id);
@@ -149,7 +181,7 @@ export async function investigate(ctx: RunContext, recall: Recall, items: Item[]
       key: `coverage:${recall.recall_number}:${i.item_id}`, kind: "coverage", subject: i.item_id,
       statement: `${recall.recall_number} ${decision === "covered" ? "covers" : decision === "not_covered" ? "does not cover" : "may cover"} ${i.description}: ${reason}`,
       value: { decision, method, disputed: disputed && !adjudicated }, confidence: method === "agreed" ? 0.97 : method === "critic" ? 0.9 : disputed ? 0.5 : 0.85,
-      evidence: [recallEvidence, itemEvidence.get(i.item_id)!], producedBy: AGENT, source: ctx.by(AGENT),
+      evidence: [recallEvidence, itemEvidence.get(i.item_id)!, packageEvidence], claims: ctx.tm.claims({ kind: "code-mapping", subject: "fda_snapshot.ndc_packages" }).map(c => c.id), producedBy: AGENT, source: ctx.by(AGENT),
     });
     coverage.push({ item_id: i.item_id, decision, reason, method, rule, model: m, disputed: disputed && !adjudicated, claimId: claim.id });
     ctx.trace.emit(disputed && !adjudicated ? "branch" : "claim", AGENT, claim.statement, { claim: claim.id, rule, model: m });
@@ -217,7 +249,7 @@ export async function investigate(ctx: RunContext, recall: Recall, items: Item[]
     }
     const override = lotOverrides.get(lot.lot_row_id);
     if (override && verdict !== "review") { reason = `critic: ${override} (was ${verdict.replace("_", " ")}: ${reason})`; verdict = "review"; }
-    const lotEv = await evidence(ctx, AGENT, "hospital.inventory_lots", lot.lot_row_id, lot);
+    const lotEv = await evidence(ctx, AGENT, "hospital.inventory_lots", lot.lot_row_id, lotEvidenceRow(lot as unknown as Record<string, unknown>));
     const claim = await ctx.tm.assertClaim({
       key: `lot:${recall.recall_number}:${lot.lot_row_id}`, kind: "lot-verdict", subject: lot.lot_row_id,
       statement: `${lot.location_code} lot ${lot.lot_number} (${lot.qty_units} ${lot.item_id}): ${verdict.replace("_", " ")}. ${reason}${expired && verdict !== "not_affected" ? " Already past expiry: it should not be on the shelf at all." : ""}`,
@@ -228,6 +260,8 @@ export async function investigate(ctx: RunContext, recall: Recall, items: Item[]
     findings.push({ lot, item_id: lot.item_id, verdict, reason, expired, nearMiss: near, claimId: claim.id });
     ctx.trace.emit("claim", AGENT, claim.statement, { claim: claim.id });
   }
+  const active = new Set([...coverage.map(c => c.claimId), ...findings.map(f => f.claimId)]);
+  for (const c of ctx.tm.claims().filter(c => ["coverage", "lot-verdict"].includes(c.kind) && c.key.split(":")[1] === recall.recall_number && !active.has(c.id))) await ctx.tm.retractClaim(c.key, "source row or candidate removed", ctx.by(AGENT));
   ctx.trace.emit("agent-end", AGENT, `${findings.filter(f => f.verdict === "affected").length} affected, ${findings.filter(f => f.verdict === "review").length} to review, ${findings.filter(f => f.verdict === "not_affected").length} cleared`);
   return { recall, recallEvidence, constraints, parseClaim: parseClaim.id, parseMethod, coverage, findings, dataIssues };
 }

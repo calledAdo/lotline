@@ -23,7 +23,11 @@ export type RoundResult = { round: number; exposure: Exposure; supply: ItemSuppl
 export type CaseOptions = { critic?: boolean; onRound?: (result: RoundResult) => void; reviewer?: typeof review };
 export async function runCase(ctx: RunContext, recallNumber: string, items: Item[], crosswalk: Crosswalk, opts: CaseOptions = {}): Promise<CaseResult | null> {
   const recall = await loadRecall(ctx, recallNumber);
-  if (!recall) { ctx.trace.emit("error", "orchestrator", `recall ${recallNumber} not found`); return null; }
+  if (!recall) {
+    for (const c of ctx.tm.claims().filter(c => c.key.split(":")[1] === recallNumber)) await ctx.tm.retractClaim(c.key, "recall source is missing; case cannot be verified", ctx.by("orchestrator"));
+    ctx.trace.emit("invalidation", "orchestrator", `recall ${recallNumber} is missing; case claims withdrawn and pharmacist review required`);
+    return null;
+  }
   const coverageAdj = new Map<string, { decision: CoverageDecision; reason: string }>();
   const substituteAdj = new Map<string, { ndc11: string | null; reason: string }>();
   const lotOverrides = new Map<string, string>();

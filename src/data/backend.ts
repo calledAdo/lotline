@@ -10,9 +10,10 @@ export type Column = { name: string; type: string };
 export interface DataBackend {
   readonly name: "zetaris" | "duckdb";
   readonly dialect: Dialect;
+  forAgent?(agent: string): DataBackend;
   /** The registered sources: table name -> description. */
   sources(): Promise<{ table: string; system: string; description: string }[]>;
-  describe(table: string): Promise<Column[]>;
+  describe(table: string, ctx?: { agent: string; trace: Trace }): Promise<Column[]>;
   query(sql: string, ctx: { agent: string; purpose: string; trace: Trace }): Promise<Row[]>;
   close(): Promise<void>;
 }

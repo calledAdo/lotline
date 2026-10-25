@@ -17,7 +17,7 @@ const queries: { name: string; sql: (d: Dialect) => string }[] = [
 const z = new ZetarisBackend(), l = new LocalBackend(), trace = silentTrace();
 let failed = 0;
 for (const q of queries) {
-  const [a, b] = await Promise.all([z.query(q.sql("spark"), { agent: "parity", purpose: q.name, trace }), l.query(q.sql("duckdb"), { agent: "parity", purpose: q.name, trace })]);
+  const [a, b] = await Promise.all([z.query(q.sql("spark"), { agent: "watcher", purpose: q.name, trace }), l.query(q.sql("duckdb"), { agent: "watcher", purpose: q.name, trace })]);
   const norm = (rows: Record<string, string | null>[]) => JSON.stringify(rows.map(r => Object.values(r).map(v => (v === null ? null : v.replace(/\.0$/, "")))));
   const same = norm(a) === norm(b);
   if (!same) failed++;

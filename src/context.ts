@@ -24,8 +24,9 @@ export function makeContext(o: { runId: string; runDir?: string; today: string; 
     ...o,
     backend: {
       name: o.backend.name, dialect: o.backend.dialect,
+      forAgent: agent => normalizedBackend(o.backend.forAgent?.(agent) ?? o.backend),
       sources: () => o.backend.sources(),
-      describe: async table => (await o.backend.describe(table)).sort((a, b) => a.name.localeCompare(b.name)),
+      describe: async (table, meta) => (await o.backend.describe(table, meta)).sort((a, b) => a.name.localeCompare(b.name)),
       query: async (sql, meta) => stableRows(await o.backend.query(sql, meta)),
       close: () => o.backend.close(),
     },
@@ -38,4 +39,14 @@ export function makeContext(o: { runId: string; runDir?: string; today: string; 
 export async function evidence(ctx: RunContext, agent: string, table: string, key: string, row: Record<string, unknown>): Promise<string> {
   const ev = await ctx.tm.observeEvidence({ table, key, row, source: ctx.by(agent) });
   return ev.id;
+}
+
+function normalizedBackend(backend: DataBackend): DataBackend {
+  return { name: backend.name, dialect: backend.dialect,
+    forAgent: agent => normalizedBackend(backend.forAgent?.(agent) ?? backend),
+    sources: () => backend.sources(), describe: async (table, meta) => (await backend.describe(table, meta)).sort((a,b) => a.name.localeCompare(b.name)),
+    query: async (sql, meta) => stableRows(await backend.query(sql, meta)), close: () => backend.close() };
+}
+export function forAgent(ctx: RunContext, agent: string): RunContext {
+  return { ...ctx, backend: ctx.backend.forAgent?.(agent) ?? ctx.backend };
 }

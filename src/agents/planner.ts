@@ -1,3 +1,4 @@
+import { forAgent } from "../context.ts";
 // Planner: which of today's ongoing recalls touch our stock, and in what order do we work
 // them? Code screens every ongoing recall (from the live openFDA feed through Zetaris, or
 // the snapshot offline) against our item master by NDC, package hierarchy and product name.
@@ -17,6 +18,7 @@ export type Candidate = {
 export type TriageEntry = Candidate & { relevant: "yes" | "no" | "maybe"; urgency: "now" | "today" | "this week"; why: string; by: "model" | "rule" };
 
 export async function triage(ctx: RunContext, items: Item[]): Promise<TriageEntry[]> {
+  ctx = forAgent(ctx, AGENT);
   ctx.trace.emit("agent-start", AGENT, "screening today's ongoing recalls against our stock");
   const live = ctx.backend.name === "zetaris";
   const rows = await ctx.backend.query(

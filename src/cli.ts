@@ -6,6 +6,7 @@
 import { WorldModel } from "../engines/world-model/src/index.ts";
 import { ROOT, env, redact, sampleMode } from "./env.ts";
 import { randomUUID } from "node:crypto";
+import { PolicyRefusal } from "./data/policy.ts";
 import { openBackend } from "./data/index.ts";
 import { makeContext } from "./context.ts";
 import { Trace } from "./trace.ts";
@@ -45,9 +46,9 @@ async function main() {
   const ctx = makeContext({ runId, runDir: trace.dir, today, backend, world, trace });
   trace.emit("run-start", "lotline", `${cmd} ${args.slice(1).join(" ")} on ${backend.name}${sampleMode ? " (SAMPLE_MODE: recorded model replies, local data)" : ""}`);
   try {
+    const stale = cmd === "watch" ? await detectChanges(ctx) : [];
     const crosswalk = await ensureCrosswalk(ctx);
     const items = await loadItems(ctx, crosswalk);
-    const stale = cmd === "watch" ? await detectChanges(ctx) : [];
     const recalls = cmd === "run" ? [args[1]!] : cmd === "watch" ? stale.map(s => s.recall) : (await triage(ctx, items)).filter(t => t.relevant !== "no").slice(0, Number(opt("max") ?? 10)).map(t => t.recall_number);
     const before = new Map(recalls.map(r => [r, cmd === "watch" ? lastPacket(r, runId, backend.name) : null]));
     const packets: Packet[] = [];
@@ -70,6 +71,12 @@ async function main() {
     console.log(`Index: ${path.join(trace.dir, "index.html")}`);
     for (const dff of diffs) console.log(`\nWhat changed in ${dff.recall}:\n${dff.lines.map(l => `  - ${l}`).join("\n") || "  nothing"}`);
     if (cmd === "watch" && !recalls.length) console.log("\nEvery earlier conclusion still holds.");
+  } catch (error) {
+    if (!(error instanceof PolicyRefusal)) throw error;
+    trace.emit("run-end", "lotline", "Run stopped by data access policy; no automatic approval", { principal: error.principal });
+    writeFileSync(path.join(trace.dir, "run.json"), JSON.stringify({ runId, cmd, today, backend: backend.name, policyRefused: true }));
+    renderRun(trace.dir);
+    console.log(`Data access refused. Review ${path.join(trace.dir, "index.html")}`);
   } finally {
     clearTimeout(timer);
     await backend.close();

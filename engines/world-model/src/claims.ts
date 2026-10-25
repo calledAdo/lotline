@@ -80,21 +80,29 @@ export class TruthMaintenance {
     const hash = rowHash(input.row);
     const existing = this.entity(id);
     const previousHash = existing?.attrs.hash as string | undefined;
-    if (previousHash !== hash) {
+    if (previousHash !== hash || existing?.attrs.missing === true) {
       await this.world.upsertEntity({
         type: "evidence",
         externalKey: { system: "zetaris", id: `${input.table}#${input.key}` },
         name: `${input.table}#${input.key}`,
-        attrs: { table: input.table, key: input.key, hash, row: input.row },
+        attrs: { table: input.table, key: input.key, hash, row: input.row, missing: false },
         source: input.source,
       });
     }
-    return { id, table: input.table, key: input.key, hash, row: input.row, changed: previousHash !== undefined && previousHash !== hash, previousHash };
+    return { id, table: input.table, key: input.key, hash, row: input.row, changed: previousHash !== undefined && (previousHash !== hash || existing?.attrs.missing === true), previousHash };
+  }
+
+  /** Durable tombstone; re-observation restores the same stable evidence identity. */
+  async markEvidenceMissing(id: string, source: Provenance): Promise<boolean> {
+    const e = this.entity(id);
+    if (!e || e.attrs.missing === true) return false;
+    await this.world.upsertEntity({ type: "evidence", externalKey: { system: "zetaris", id: `${e.attrs.table}#${e.attrs.key}` }, attrs: { missing: true }, source });
+    return true;
   }
 
   evidence(id: string): EvidenceRecord | undefined {
     const e = this.entity(id);
-    if (!e || e.type !== "evidence") return undefined;
+    if (!e || e.type !== "evidence" || e.attrs.missing === true) return undefined;
     return { id, table: e.attrs.table as string, key: e.attrs.key as string, hash: e.attrs.hash as string, row: e.attrs.row as Record<string, unknown> };
   }
 

@@ -1,3 +1,52 @@
+-- Revoke/drop runtime principals before removing sources.
+-- Reverse only the Lotline runtime principals and grants.
+REVOKE SELECT ON DATASOURCE TABLE hospital.item_master FROM ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.recalls FROM ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.shortages FROM ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.ndc_packages FROM ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE wholesaler.catalog FROM ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_updates.recall_updates FROM ROLE 'lotline_cartographer';
+REVOKE USER '${ZETARIS_CARTOGRAPHER_USER}' FROM ROLE 'lotline_cartographer';
+DROP USER '${ZETARIS_CARTOGRAPHER_USER}';
+DROP ROLE 'lotline_cartographer';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.recalls FROM ROLE 'lotline_planner';
+REVOKE SELECT ON VIEW TABLE fda_live_views.recalls FROM ROLE 'lotline_planner';
+REVOKE USER '${ZETARIS_PLANNER_USER}' FROM ROLE 'lotline_planner';
+DROP USER '${ZETARIS_PLANNER_USER}';
+DROP ROLE 'lotline_planner';
+REVOKE SELECT ON DATASOURCE TABLE hospital.item_master FROM ROLE 'lotline_exposure';
+REVOKE SELECT ON DATASOURCE TABLE hospital.inventory_lots FROM ROLE 'lotline_exposure';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.ndc_packages FROM ROLE 'lotline_exposure';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.recalls FROM ROLE 'lotline_exposure';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_updates.recall_updates FROM ROLE 'lotline_exposure';
+REVOKE USER '${ZETARIS_EXPOSURE_USER}' FROM ROLE 'lotline_exposure';
+DROP USER '${ZETARIS_EXPOSURE_USER}';
+DROP ROLE 'lotline_exposure';
+REVOKE SELECT ON DATASOURCE TABLE hospital.inventory_lots FROM ROLE 'lotline_supply';
+REVOKE SELECT ON DATASOURCE TABLE hospital.dispensing_daily FROM ROLE 'lotline_supply';
+REVOKE SELECT ON DATASOURCE TABLE hospital.purchase_orders FROM ROLE 'lotline_supply';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.recalls FROM ROLE 'lotline_supply';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.ndc_packages FROM ROLE 'lotline_supply';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.shortages FROM ROLE 'lotline_supply';
+REVOKE SELECT ON VIEW TABLE fda_live_views.shortages FROM ROLE 'lotline_supply';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE wholesaler.catalog FROM ROLE 'lotline_supply';
+REVOKE USER '${ZETARIS_SUPPLY_USER}' FROM ROLE 'lotline_supply';
+DROP USER '${ZETARIS_SUPPLY_USER}';
+DROP ROLE 'lotline_supply';
+REVOKE SELECT ON DATASOURCE TABLE hospital.item_master FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON DATASOURCE TABLE hospital.inventory_lots FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON DATASOURCE TABLE hospital.dispensing_daily FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON DATASOURCE TABLE hospital.purchase_orders FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.recalls FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.shortages FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_snapshot.ndc_packages FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE wholesaler.catalog FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON LIGHTNING DATABASE TABLE fda_updates.recall_updates FROM ROLE 'lotline_watcher';
+REVOKE SELECT ON VIEW TABLE fda_live_views.shortages FROM ROLE 'lotline_watcher';
+REVOKE USER '${ZETARIS_WATCHER_USER}' FROM ROLE 'lotline_watcher';
+DROP USER '${ZETARIS_WATCHER_USER}';
+DROP ROLE 'lotline_watcher';
+
 -- Removes everything register_zetaris_sources.sql creates. SchemaStore views and their
 -- container have no SQL drop in this Zetaris build; remove them in Data Explorer if needed.
 DROP DATASOURCE hospital;

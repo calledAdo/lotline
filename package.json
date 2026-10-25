@@ -14,7 +14,7 @@
     "data:fetch": "tsx scripts/fetch-openfda.ts",
     "data:seed": "tsx scripts/seed-hospital.ts",
     "data:upload": "tsx scripts/upload-objects.ts",
-    "setup:zetaris": "node scripts/zsql.mjs -f scripts/register_zetaris_sources.sql",
+    "setup:zetaris": "tsx scripts/setup-zetaris.ts",
     "engine:conformance": "WORLD_MODEL_IMPL=$PWD/engines/world-model/src/index.ts tsx engines/world-model/conformance/runner.ts",
     "lotline": "tsx src/cli.ts",
     "demo": "SAMPLE_MODE=true tsx src/cli.ts run D-0727-2026 --ephemeral"

@@ -7,17 +7,25 @@ import { ROOT } from "../env.ts";
 import { SOURCES, type Column, type DataBackend, type Row } from "./backend.ts";
 import type { Trace } from "../trace.ts";
 
-const file = (p: string) => `'${path.join(ROOT, p).replaceAll("'", "''")}'`;
+import { AGENT_TABLES, checkQuery, checkTable, isPrincipal, principalName, refuse } from "./policy.ts";
 
 export class LocalBackend implements DataBackend {
   readonly name = "duckdb" as const;
   readonly dialect = "duckdb" as const;
   private conn?: DuckDBConnection;
+  constructor(private principal?: string, private owner?: LocalBackend, private dataRoot = ROOT) {}
+  forAgent(agent: string): DataBackend {
+    if (!isPrincipal(agent)) refuse(agent, "unknown principal");
+    if (this.principal && agent !== this.principal) refuse(this.principal, "cannot switch principal");
+    return new LocalBackend(agent, this.owner ?? this, this.dataRoot);
+  }
 
   private async c(): Promise<DuckDBConnection> {
+    if (this.owner) return this.owner.c();
     if (this.conn) return this.conn;
     const db = await DuckDBInstance.create(":memory:");
     const c = await db.connect();
+    const file = (p: string) => `'${path.join(this.dataRoot, p).replaceAll("'", "''")}'`;
     const views: [string, string][] = [
       ["hospital.locations", `read_json_auto(${file("data/sources/hospital_locations.jsonl")})`],
       ["hospital.item_master", `read_json(${file("data/sources/hospital_item_master.jsonl")}, columns={item_id:'VARCHAR', ndc11:'VARCHAR', description:'VARCHAR', generic_name:'VARCHAR', strength:'VARCHAR', dosage_form:'VARCHAR', route:'VARCHAR', manufacturer:'VARCHAR', unit_of_issue:'VARCHAR', units_per_pack:'INTEGER', formulary_status:'VARCHAR'})`],
@@ -39,24 +47,29 @@ export class LocalBackend implements DataBackend {
   }
 
   async sources() {
-    return SOURCES;
+    return this.principal && isPrincipal(this.principal) ? SOURCES.filter(s => (AGENT_TABLES[this.principal as keyof typeof AGENT_TABLES] as readonly string[]).includes(s.table)) : SOURCES;
   }
 
-  async describe(table: string): Promise<Column[]> {
+  async describe(table: string, ctx?: { agent: string; trace: Trace }): Promise<Column[]> {
+    checkTable(this.principal ?? "cartographer", table, ctx?.trace);
     const r = await (await this.c()).runAndReadAll(`DESCRIBE ${table}`);
     return r.getRowObjects().map(o => ({ name: String(o.column_name), type: String(o.column_type).toLowerCase() }));
   }
 
   async query(sql: string, ctx: { agent: string; purpose: string; trace: Trace }): Promise<Row[]> {
+    const agent = this.principal ?? ctx.agent;
+    if (ctx.agent !== agent) refuse(agent, "query agent does not match bound principal", ctx.trace);
+    checkQuery(agent, sql, ctx.trace);
     const t0 = Date.now();
-    const r = await (await this.c()).runAndReadAll(sql);
+    const connection = await this.c();
+    const r = await connection.runAndReadAll(sql);
     const rows = r.getRowObjects().map(o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v === null || v === undefined ? null : String(v)])));
     const live = /fda_live_views\./.test(sql) ? " (live view served from snapshot)" : "";
-    ctx.trace.emit("sql", ctx.agent, `${ctx.purpose}: ${rows.length} rows from local DuckDB${live} in ${Date.now() - t0}ms`, { backend: "duckdb", sql, rows: rows.length, sample: rows.slice(0, 3) });
+    ctx.trace.emit("sql", ctx.agent, `${ctx.purpose}: ${rows.length} rows from local DuckDB${live} in ${Date.now() - t0}ms`, { principal: principalName(agent as keyof typeof AGENT_TABLES), backend: "duckdb", sql, rows: rows.length, sample: rows.slice(0, 3) });
     return rows;
   }
 
   async close() {
-    this.conn?.closeSync();
+    if (!this.owner) this.conn?.closeSync();
   }
 }

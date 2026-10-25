@@ -13,17 +13,21 @@ Six logical domains are connected: hospital inventory/usage/purchasing, FDA reca
 | S3 CSV | `wholesaler.catalog` |
 | REST | `fda_live.shortages_raw`, `recalls_raw`, flattened through `fda_live_views` |
 
-“Six sources” describes domains, not six physical connectors. The SQL registers five source families plus view containers; the agent-facing catalog has 12 logical tables. Live application queries use Zetaris REST SQL. Sample mode implements the same table interface in DuckDB over the bundled files.
+“Six sources” describes domains, not six physical connectors. The SQL registers five source families plus view containers; the agent-facing catalog has 12 logical tables. Live application queries use Zetaris REST SQL under five non-admin principals. A single policy defines the cartographer, planner, exposure, supply and watcher table allowlists and generates their SELECT grants. DuckDB enforces the same policy over bundled files. The critic and reporter receive agent results and have no data principal.
 
-The Source Cartographer examines columns, samples identifier formats, tests proposed joins using overlap counts, and publishes `lotline_views.ndc_crosswalk`. This is a SchemaStore view, not a physically materialized result cache. In the fixture, the naive hospital-to-FDA-directory join matches 0/10 items, normalized matching reaches 10/10, normalized shortage matching reaches 7/10, and wholesaler padding raises matches from 5/10 to 8/10. Every SQL statement is visible in the HTML evidence view. Query failures are traced too.
+The Source Cartographer examines columns, samples identifier formats, tests proposed joins using overlap counts, and keeps the measured mappings in the World Model. Administrator setup publishes `lotline_views.ndc_crosswalk`. This is a SchemaStore view, not a physically materialized result cache. In the fixture, the naive hospital-to-FDA-directory join matches 0/10 items, normalized matching reaches 10/10, normalized shortage matching reaches 7/10, and wholesaler padding raises matches from 5/10 to 8/10. Every SQL statement is visible in the HTML evidence view. Query failures are traced too.
 
-The recall change feed is exercised by an explicitly labelled simulated expansion. After the verified live Naropin baseline, adding lot 6133437 made 11 claims stale. The watch recomputed the case: 75 MAIN units were added to quarantine, quarantine rose 68 → 143, and remaining supply fell 8.7 → 0 days. The feed was reset locally and in S3. This is a drill result, not an FDA announcement.
+The watcher refreshes all recorded source evidence: recall revisions, inventory, item master, package hierarchy, snapshot/live shortages, catalog rows, directory candidates, dispensing aggregates, purchase orders and overlap probes. Each source has a shared projection. Claims record dependency hashes; missing rows receive durable tombstones. Query-set evidence tracks empty results and membership changes. The trace identifies changed table/key/fields and affected claims, and the packet shows the re-derived action differences.
+
+The three labelled drills expand a recall, mark a recommended wholesaler product Backorder, or mark a snapshot shortage Unavailable. Sample drills alter local fixture files; live drills replace the same S3 objects Zetaris reads. Reset restores the three baselines. The external FDA REST service is read-only.
+
+Setup uses Lightning `ADD USER WITH`, `CREATE ROLE`, `ASSIGN USER` and table-specific `GRANT SELECT`. Runtime authentication uses Basic login at `/auth/login` and an in-memory ID token; optional per-user API keys are supported. No administrator fallback exists. The local build restricts `DESCRIBE` separately, so column discovery uses SELECT headers with `LIMIT 0`. Setup owns the crosswalk view; runtime principals receive no creation/write grants. Policy refusals appear in both trace and HTML, including runs that cannot produce a case packet.
 
 ## Meterless World Model: conclusions with dependencies
 
 The adopted engine is the Meterless World Model reference at upstream commit `1742dec56a66e58eef9dda2d2b865823758ca8cd`, Apache-2.0. `engines/world-model/LICENSE`, `NOTICE` and `UPSTREAM_COMMIT` preserve provenance. The unmodified conformance runner passes **8/8** checks.
 
-Earlier Lotline work changed local persistence to append-only JSONL, made conflict-resolution events replay faithfully, and added `claims.ts`: evidence rows have stable IDs/content hashes; agent claims cite evidence and other claims. Updating evidence makes only dependent conclusions stale, including transitive dependents. Reasserting a claim clears its own staleness while revision propagates downstream. Tests cover invalid dependencies, retractions, idempotence, persistence replay and a torn final event. No engine files were changed during phases 6–9.
+Lotline uses append-only JSONL persistence, replay-faithful conflict-resolution events, and `claims.ts`: evidence rows have stable IDs/content hashes; agent claims cite evidence and other claims. Updating evidence makes only dependent conclusions stale, including transitive dependents. Reasserting a claim clears its own staleness while revision propagates downstream. Tests cover invalid dependencies, retractions, idempotence, persistence replay and a torn final event.
 
 The engine is used by the Cartographer's mapping claims, Exposure's product/lot claims, Supply's dependent stock conclusions, the revision loop, the watcher and the report's claim links. It is not an unused imported library. See the engine-to-feature table in the root README and `test/world-model.test.ts`.
 
@@ -46,7 +50,7 @@ Code independently enforces product scope, exact lot matching, arithmetic, alter
 
 ## Measured critic ablation
 
-The single live experiment on **2026-10-25** completed ten paired cases in **736,466 ms (12.27 minutes)**: six real anchors and four real different-product/compounded traps. Both arms run the same agents against identical frozen DuckDB data. Lightning responses are generated live once and shared within each pair to control worker sampling; the treatment adds live Ultra and revision. Reporter prose is excluded from scoring. Labels never enter prompts.
+The archived live experiment on **2026-10-25** (artifact commit `2cb80bd`; execution source commit not recorded) completed ten paired cases in **736,466 ms (12.27 minutes)**: six real anchors and four real different-product/compounded traps. Both arms run the same agents against identical frozen DuckDB data. Lightning responses are generated live once and shared within each pair to control worker sampling; the treatment adds live Ultra and revision. Reporter prose is excluded from scoring. Labels never enter prompts.
 
 | Metric | Lightning + code | Plus Ultra |
 |---|---:|---:|
@@ -66,7 +70,7 @@ The single live experiment on **2026-10-25** completed ten paired cases in **736
 
 **Ultra did not improve lot-verdict accuracy in this run.** It resolved three code/model coverage disputes (Naropin 30 mL, dextrose, and the QuVa combination trap) and declined a 500 mL dextrose alternative for a recalled 2,000 mL presentation. It also raised container/clinical workflow cautions. These recommendations were not clinically adjudicated by this evaluation, so they are observations, not demonstrated clinical benefit. One Ultra request timed out and recovered on retry. The treatment's HTTP count is incremental because 46 response uses were shared/cached; it is not a standalone cost comparison.
 
-All failures (none for lot verdicts), disputes, resolutions, objections, escalation text and receipts are in `eval/results/ablation-2026-10-25.json` and `.md`. Many of the 230 pairs are true negatives, which is why the 21 original labelled rows are also reported. This selected ten-case study cannot establish general safety or efficacy. No prompt was tuned against the labels. Later offline regression fixes are documented separately in the phase report; the historical live experiment was not rerun after hardening.
+All failures (none for lot verdicts), disputes, resolutions, objections, escalation text and receipts are in `eval/results/ablation-2026-10-25.json` and `.md`. Many of the 230 pairs are true negatives, which is why the 21 original labelled rows are also reported. This selected ten-case study cannot establish general safety or efficacy. No prompt was tuned against the labels. The archived measurements apply to the recorded experiment; they are not a measurement of the working tree.
 
 ## Reproduce the judge path
 
@@ -78,6 +82,6 @@ npm test
 npm run engine:conformance
 ```
 
-The demo needs no credentials. Promoted recordings are model replies, not saved packets or SQL results: DuckDB and the real agents produce the packet on every run. Exact request hashes were verified for six live anchors and the watch drill. After action-policy hardening, core investigative replay remains exact; changed briefing inputs may use the safe, explicitly labelled summary template. The self-contained HTML shows the buyer checklist first and all evidence, SQL and provider receipts below it, including watch diffs and a sweep index.
+The demo needs no credentials. Promoted recordings are model replies, not saved packets or SQL results: DuckDB and the real agents produce the packet on every run. The archived six-anchor and watch replay artifacts are recorded at commit `2cb80bd`. Investigative requests replay by exact hash; unmatched briefing inputs use the explicitly labelled summary template. The self-contained HTML shows the buyer checklist first and all evidence, SQL and provider receipts below it, including watch diffs and a sweep index.
 
-This implementation does not include H-MEM, per-agent Zetaris credentials, Iceberg writeback, a purchasing connector, or autonomous clinical authorization. The watcher currently refreshes known recall and inventory evidence rather than all source tables. openFDA is public domain/CC0 and unvalidated; synthetic fixtures contain no patient information. These limits and the precise validation outputs are recorded in `briefs/codex-phase6-9-report.md`.
+This implementation does not include H-MEM, Iceberg writeback, a purchasing connector, or autonomous clinical authorization. The watcher polls dependencies of worked cases; it is not a continuous subscription or an atomic cross-source snapshot. openFDA is public domain/CC0 and unvalidated; synthetic fixtures contain no patient information. These limits and the precise validation outputs are recorded in `briefs/codex-hardening-2-report.md`.

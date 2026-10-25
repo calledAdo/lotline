@@ -28,5 +28,7 @@ const run = readdirSync(path.join(dir, "runs"))[0];
 const events = readFileSync(path.join(dir, "runs", run, "trace.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
 const result = { directory: dir, envFilePresent: existsSync(path.join(dir, ".env")), files: files.length, logs, replayed: events.filter(e => e.type === "llm" && e.data?.receipt?.replayed).length, fallbacks: events.filter(e => e.type === "fallback").map(e => e.summary) };
 mkdirSync(path.join(ROOT, "briefs", "validation"), { recursive: true });
-writeFileSync(path.join(ROOT, "briefs", "validation", "clean-checkout.json"), JSON.stringify(result, null, 2) + "\n");
+const output = process.argv[2] ? path.resolve(ROOT, process.argv[2]) : path.join(ROOT, "briefs", "validation", "clean-checkout.json");
+mkdirSync(path.dirname(output), { recursive: true });
+writeFileSync(output, JSON.stringify(result, null, 2) + "\n");
 console.log(`Credential-free demo: ${result.replayed} replayed responses, ${result.fallbacks.length} fallbacks; ${dir}`);

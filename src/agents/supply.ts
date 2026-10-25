@@ -1,3 +1,4 @@
+import { forAgent } from "../context.ts";
 // Supply Analyst: what does the quarantine do to our supply, and what can we use instead?
 // Supply arithmetic is deterministic. Alternatives are screened by code (ingredient,
 // strength, container, volume, recalling firm, repackager, FDA shortage, open recalls,
@@ -11,6 +12,9 @@ import { firmCore, REPACKAGER } from "../recall-text.ts";
 import { ingredientCore, parseStrength, sameStrength, unitPackage } from "../pharma.ts";
 import type { Exposure, Item } from "../domain.ts";
 import type { Crosswalk } from "./cartographer.ts";
+
+import { queryEvidence, usageEvidenceRow, directoryEvidenceRow } from "../evidence.ts";
+import type { Row } from "../data/backend.ts";
 
 const AGENT = "supply";
 const TARGET_DAYS = 14;  // days of supply below which we act
@@ -45,22 +49,25 @@ const days = (n: number, avg: number) => (avg > 0 ? Math.round((n / avg) * 10) /
 export const isOrderable = (a: Alternative): boolean => a.status !== "excluded" && a.catalog?.status === "Available";
 
 export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[], crosswalk: Crosswalk, adjudicated = new Map<string, { ndc11: string | null; reason: string }>()): Promise<ItemSupply[]> {
+  ctx = forAgent(ctx, AGENT);
   const d = ctx.backend.dialect;
   const affectedItems = [...new Set(ex.findings.filter(f => f.verdict !== "not_affected").map(f => f.item_id))];
   ctx.trace.emit("agent-start", AGENT, `supply impact for ${affectedItems.length} product(s) under ${ex.recall.recall_number}`);
-  if (!affectedItems.length) { ctx.trace.emit("agent-end", AGENT, "nothing quarantined; no supply impact"); return []; }
+  if (!affectedItems.length) {
+    for (const c of ctx.tm.claims().filter(c => ["supply", "alternative"].includes(c.kind) && c.key.split(":")[1] === ex.recall.recall_number)) await ctx.tm.retractClaim(c.key, "no remaining supply impact", ctx.by(AGENT));
+    ctx.trace.emit("agent-end", AGENT, "nothing quarantined; no supply impact"); return []; }
 
   const q = (sql: string, purpose: string) => ctx.backend.query(sql, { agent: AGENT, purpose, trace: ctx.trace });
   const map = (table: string) => crosswalk.mappings.find(m => m.table === table);
   const pkgMap = map("fda_snapshot.ndc_packages"), shortMap = map("fda_snapshot.shortages"), catMap = map("wholesaler.catalog");
 
-  const lots = await q(`SELECT item_id, location_code, lot_number, ${asText(d, "expiry_date")} AS expiry_date, ${asText(d, "qty_units")} AS qty FROM hospital.inventory_lots`, "read all lots on hand");
+  const lots = await q(`SELECT lot_row_id, item_id, location_code, lot_number, po_number, ${asText(d, "expiry_date")} AS expiry_date, ${asText(d, "qty_units")} AS qty_units FROM hospital.inventory_lots`, "read all lots on hand");
   const since = new Date(Date.parse(ctx.today) - 30 * 86_400_000).toISOString().slice(0, 10);
-  const usage = await q(`SELECT item_id, ${asText(d, "sum(units)")} AS units FROM hospital.dispensing_daily WHERE day > cast('${since}' as date) GROUP BY item_id`, "30-day dispensing by product");
-  const pos = await q(`SELECT po_number, item_id, ${asText(d, "packs")} AS packs, ${asText(d, "expected_on")} AS expected_on FROM hospital.purchase_orders WHERE status = 'open'`, "open purchase orders");
+  const usage = await q(`SELECT item_id, ${asText(d, "sum(units)")} AS units FROM hospital.dispensing_daily WHERE day > cast('${since}' as date) AND day <= cast('${ctx.today}' as date) GROUP BY item_id`, "30-day dispensing by product");
+  const pos = await q(`SELECT po_number, item_id, ${asText(d, "packs")} AS packs, ${asText(d, "expected_on")} AS expected_on, status FROM hospital.purchase_orders WHERE status = 'open'`, "open purchase orders");
   const ongoing = await q(`SELECT recall_number, product_description, code_info, recalling_firm FROM fda_snapshot.recalls WHERE status = 'Ongoing'`, "ongoing recalls, to screen alternatives");
-  const catalog = catMap ? await q(`SELECT ${ident(catMap.column)} AS code, status, eta FROM wholesaler.catalog`, "wholesaler availability") : [];
-  const catByNdc = new Map(catalog.map(c => [normalize(c.code), { status: c.status ?? "", eta: c.eta ?? null }]));
+  const catalog = catMap ? await q(`SELECT ${ident(catMap.column)} AS ndc_numeric, status, eta FROM wholesaler.catalog`, "wholesaler availability") : [];
+  const catByNdc = new Map(catalog.map(c => [normalize(c.ndc_numeric), { status: c.status ?? "", eta: c.eta ?? null }]));
   const recalledProducts = new Map<string, string[]>();
   for (const r of ongoing) for (const n of ndcsInText(`${r.product_description} ${r.code_info ?? ""}`)) {
     const p = productOf(toNdc11(n)!);
@@ -71,12 +78,25 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
   // Products are independent, so they are analysed concurrently (World Model writes are serialised).
   const results = (await Promise.all(affectedItems.map(async (itemId): Promise<ItemSupply> => {
     const item = items.find(i => i.item_id === itemId)!;
-    const own = pkgMap ? (await q(`SELECT package_ndc, molecule_query, active_ingredients, dosage_form, route, package_description, labeler_name FROM fda_snapshot.ndc_packages WHERE ${ndcExpr(d, ident(pkgMap.column), pkgMap.transform)} = '${item.ndc11}'`, `FDA directory entry for ${item.item_id}`))[0] : undefined;
+    const deps: string[] = [];
+    const remember = async (table: string, sql: string, rows: Row[]) => {
+      const id = await queryEvidence(ctx, AGENT, table, sql, rows); deps.push(id); return id;
+    };
+    const qe = async (sql: string, purpose: string) => {
+      const rows = await q(sql, purpose);
+      const table = /FROM ([a-z_]+\.[a-z_]+)/i.exec(sql)![1];
+      await remember(table, sql, rows); return rows;
+    };
+    await remember("hospital.inventory_lots", `SELECT lot_row_id, item_id, location_code, lot_number, po_number, ${asText(d, "expiry_date")} AS expiry_date, ${asText(d, "qty_units")} AS qty_units FROM hospital.inventory_lots WHERE item_id = '${itemId}'`, lots.filter(l => l.item_id === itemId));
+    await remember("hospital.purchase_orders", `SELECT po_number, item_id, ${asText(d, "packs")} AS packs, ${asText(d, "expected_on")} AS expected_on, status FROM hospital.purchase_orders WHERE status = 'open' AND item_id = '${itemId}'`, pos.filter(p => p.item_id === itemId));
+    await remember("fda_snapshot.recalls", `SELECT recall_number, product_description, code_info, recalling_firm FROM fda_snapshot.recalls WHERE status = 'Ongoing'`, ongoing);
+
+    const own = pkgMap ? (await qe(`SELECT package_ndc, molecule_query, active_ingredients, dosage_form, route, package_description, labeler_name FROM fda_snapshot.ndc_packages WHERE ${ndcExpr(d, ident(pkgMap.column), pkgMap.transform)} = '${item.ndc11}'`, `FDA directory entry for ${item.item_id}`))[0] : undefined;
 
     // --- supply arithmetic ---
     const itemLots = lots.filter(l => l.item_id === itemId);
     const findings = ex.findings.filter(f => f.item_id === itemId);
-    const onHand = itemLots.filter(l => l.expiry_date! >= ctx.today).reduce((s, l) => s + Number(l.qty), 0);
+    const onHand = itemLots.filter(l => l.expiry_date! >= ctx.today).reduce((s, l) => s + Number(l.qty_units), 0);
     const quarantinedFindings = findings.filter(f => f.verdict !== "not_affected");
     const quarantined = quarantinedFindings.filter(f => !f.expired).reduce((s, f) => s + f.lot.qty_units, 0);
     const expiredRecalled = quarantinedFindings.filter(f => f.expired).reduce((s, f) => s + f.lot.qty_units, 0);
@@ -89,17 +109,20 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
     let ownShortage: ItemSupply["ownShortage"] = null;
     if (shortMap) {
       const where = `${ndcExpr(d, ident(shortMap.column), shortMap.transform)} IN (${inList([item.ndc11, ...item.unitNdcs])})`;
-      const snap = (await q(`SELECT package_ndc, availability, shortage_reason, related_info, update_date FROM fda_snapshot.shortages WHERE ${where}`, `FDA shortage status of ${item.item_id}`))[0];
-      const live = (await q(`SELECT package_ndc, availability, update_date FROM fda_live_views.shortages WHERE ${where}`, `live FDA shortage status of ${item.item_id}`).catch(() => []))[0];
+      const snap = (await qe(`SELECT package_ndc, availability, status, shortage_reason, related_info, update_date FROM fda_snapshot.shortages WHERE ${where}`, `FDA shortage status of ${item.item_id}`))[0];
+      const live = (await qe(`SELECT package_ndc, availability, status, shortage_reason, related_info, update_date FROM fda_live_views.shortages WHERE ${where}`, `live FDA shortage status of ${item.item_id}`))[0];
       const label = (a: string | null | undefined) => a ?? "listed, availability not stated";
       const liveCheck = ctx.backend.name === "duckdb" ? `snapshot only; no live freshness check (updated ${snap?.update_date ?? "unknown"})` : !live ? (snap ? "not on today's live list" : "not on the live list") : live.availability === snap?.availability ? `live list agrees (${label(live.availability)}, updated ${live.update_date})` : `live list now says ${label(live.availability)} (snapshot said ${snap ? label(snap.availability) : "nothing"})`;
       if (snap || live) ownShortage = { availability: label(live ? live.availability : snap?.availability), reason: snap?.shortage_reason ?? null, related: snap?.related_info ?? null, liveCheck };
-      if (snap) await evidence(ctx, AGENT, "fda_snapshot.shortages", snap.package_ndc!, snap);
+
     }
 
     // --- alternatives ---
     const alternatives: Alternative[] = [];
+    const alternativeDeps = new Map<string, string[]>();
     if (own) {
+      const ownDirectory = deps.find(id => ctx.tm.evidence(id)?.table === "fda_snapshot.ndc_packages")!;
+      const recallScreen = deps.find(id => ctx.tm.evidence(id)?.table === "fda_snapshot.recalls")!;
       const ownIngredient = String(own.active_ingredients);
       const core = ingredientCore(ownIngredient.replace(/ [\d.]+ ?\w+\/.*$/, ""));
       const ownStrength = parseStrength(ownIngredient);
@@ -107,7 +130,7 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
       const ownForm = String(own.dosage_form).split(",")[0];
       const recalledFirm = firmCore(ex.recall.recalling_firm);
       const recalledLabelers = new Set([...ndcsInText(ex.recall.product_description)].map(n => toNdc11(n)!.slice(0, 5)));
-      const candidates = await q(`SELECT package_ndc, labeler_name, brand_name, active_ingredients, ${asText(d, "ingredient_count")} AS ingredient_count, dosage_form, route, package_description, listing_expiration_date FROM fda_snapshot.ndc_packages WHERE molecule_query = '${own.molecule_query}'`, `FDA directory products for ${own.molecule_query}`);
+      const candidates = await qe(`SELECT package_ndc, molecule_query, labeler_name, brand_name, active_ingredients, ${asText(d, "ingredient_count")} AS ingredient_count, dosage_form, route, package_description, listing_expiration_date FROM fda_snapshot.ndc_packages WHERE molecule_query = '${own.molecule_query}'`, `FDA directory products for ${own.molecule_query}`);
       for (const c of candidates) {
         const ndc11 = toNdc11(c.package_ndc!);
         if (!ndc11 || ndc11 === item.ndc11 || Number(c.ingredient_count) !== 1) continue;
@@ -115,6 +138,9 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
         if (String(c.dosage_form).split(",")[0] !== ownForm) continue;
         const strengthOk = sameStrength(ownStrength, parseStrength(String(c.active_ingredients)), core);
         if (!strengthOk) continue; // a different strength is a different product, not a substitute
+        const depStart = deps.length;
+        const directory = await evidence(ctx, AGENT, "fda_snapshot.ndc_packages", c.package_ndc!, directoryEvidenceRow(c));
+        deps.push(directory);
         const unit = unitPackage(c.package_description);
         const flags: string[] = [];
         let status: AltStatus = "usable";
@@ -130,28 +156,34 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
         let fdaShortage: string | null = null;
         if (shortMap) {
           const units = ndcsInText(c.package_description).map(n => toNdc11(n)!);
-          const s = (await q(`SELECT availability FROM fda_snapshot.shortages WHERE ${ndcExpr(d, ident(shortMap.column), shortMap.transform)} IN (${inList([ndc11, ...units])})`, `shortage status of alternative ${c.package_ndc}`))[0];
+          const s = (await qe(`SELECT package_ndc, availability, status, shortage_reason, related_info, update_date FROM fda_snapshot.shortages WHERE ${ndcExpr(d, ident(shortMap.column), shortMap.transform)} IN (${inList([ndc11, ...units])})`, `shortage status of alternative ${c.package_ndc}`))[0];
           fdaShortage = s?.availability ?? null;
           if (fdaShortage === "Unavailable") exclude("FDA shortage list: Unavailable");
           else if (fdaShortage && fdaShortage !== "Available") caution(`FDA shortage list: ${fdaShortage}`);
+        }
+        if (catMap) {
+          const codes = catalog.filter(c => normalize(c.ndc_numeric) === ndc11);
+          await remember("wholesaler.catalog", `SELECT ${ident(catMap.column)} AS ndc_numeric, status, eta FROM wholesaler.catalog WHERE ${ndcExpr(d, ident(catMap.column), catMap.transform)} = '${ndc11}'`, codes);
         }
         const cat = catByNdc.get(ndc11) ?? null;
         if (cat && cat.status !== "Available") caution(`wholesaler: ${cat.status}${cat.eta ? ` until ${cat.eta}` : ""}`);
         if (cat && fdaShortage && ((cat.status === "Available") !== (fdaShortage === "Available"))) flags.push(`sources disagree: FDA says ${fdaShortage}, wholesaler says ${cat.status}`);
         const ownedItem = ownedByNdc.get(ndc11);
-        const onHandUnits = ownedItem ? lots.filter(l => l.item_id === ownedItem.item_id && l.expiry_date! >= ctx.today).reduce((s, l) => s + Number(l.qty), 0) : 0;
+        const onHandUnits = ownedItem ? lots.filter(l => l.item_id === ownedItem.item_id && l.expiry_date! >= ctx.today).reduce((s, l) => s + Number(l.qty_units), 0) : 0;
+        if (ownedItem) await qe(`SELECT lot_row_id, item_id, location_code, lot_number, po_number, ${asText(d, "expiry_date")} AS expiry_date, ${asText(d, "qty_units")} AS qty_units FROM hospital.inventory_lots WHERE item_id = '${ownedItem.item_id}'`, "alternative stock evidence");
         if (!cat && !onHandUnits) caution("not in our wholesaler's catalog");
         const score = (status === "usable" ? 100 : status === "caution" ? 50 : 0) + (onHandUnits > 0 ? 30 : 0) + (cat?.status === "Available" ? 15 : 0) + (fdaShortage === null || fdaShortage === "Available" ? 5 : 0) - flags.length;
+        alternativeDeps.set(ndc11, [ownDirectory, recallScreen, ex.recallEvidence, ...deps.slice(depStart)]);
         alternatives.push({ ndc11, ndc: c.package_ndc!, labeler: c.labeler_name!, brand: c.brand_name, ingredient: String(c.active_ingredients), package: String(c.package_description), container: unit.container, volumeMl: unit.volumeMl, status, flags, score, fdaShortage, catalog: cat, onHandUnits, ongoingRecalls: recalls, claimId: "" });
       }
       alternatives.sort((a, b) => b.score - a.score || a.ndc11.localeCompare(b.ndc11));
       alternatives.splice(12); // the screened shortlist; the rest are equivalent duplicates or excluded
       for (const a of alternatives) {
-        const ev = await evidence(ctx, AGENT, "fda_snapshot.ndc_packages", a.ndc, { labeler: a.labeler, ingredient: a.ingredient, package: a.package, fdaShortage: a.fdaShortage, catalog: a.catalog, onHand: a.onHandUnits, recalls: a.ongoingRecalls });
+
         const claim = await ctx.tm.assertClaim({
           key: `alt:${ex.recall.recall_number}:${itemId}:${a.ndc11}`, kind: "alternative", subject: itemId,
           statement: `${a.labeler} ${format11(a.ndc11)} (${a.container ?? "?"}${a.volumeMl ? ` ${a.volumeMl} mL` : ""}) is ${a.status}${a.flags.length ? `: ${a.flags.join("; ")}` : ""}`,
-          value: { status: a.status, flags: a.flags, score: a.score }, confidence: 0.9, evidence: [ev], producedBy: AGENT, source: ctx.by(AGENT),
+          value: { status: a.status, flags: a.flags, score: a.score }, confidence: 0.9, evidence: alternativeDeps.get(a.ndc11), producedBy: AGENT, source: ctx.by(AGENT),
         });
         a.claimId = claim.id;
       }
@@ -202,16 +234,18 @@ export async function analyseSupply(ctx: RunContext, ex: Exposure, items: Item[]
     };
     if (recommendation.disputed) ctx.trace.emit("branch", AGENT, `${itemId}: ${recommendation.reason}`);
 
-    const usageEv = await evidence(ctx, AGENT, "hospital.dispensing_daily", `${itemId}:30d:${ctx.today}`, { units30: usage.find(u => u.item_id === itemId)?.units ?? "0" });
+    const usageEv = await evidence(ctx, AGENT, "hospital.dispensing_daily", `${itemId}:30d:${ctx.today}`, usageEvidenceRow({ units: usage.find(u => u.item_id === itemId)?.units ?? "0" }));
     const claim = await ctx.tm.assertClaim({
       key: `supply:${ex.recall.recall_number}:${itemId}`, kind: "supply", subject: itemId,
       statement: `${item.description}: ${onHand} usable units before quarantine, ${quarantined} quarantined${expiredRecalled ? ` (+${expiredRecalled} expired recalled units)` : ""}, ${usable} left; ${avgDaily}/day means ${days(onHand, avgDaily) ?? "n/a"} -> ${days(usable, avgDaily) ?? "n/a"} days of supply${ownShortage ? `; FDA shortage list: ${ownShortage.availability} (${ownShortage.liveCheck})` : ""}.`,
       value: { onHand, quarantined, expiredRecalled, usable, avgDaily, daysBefore: days(onHand, avgDaily), daysAfter: days(usable, avgDaily), useNow: useNow?.ndc11 ?? null, order: chosen },
-      confidence: 0.95, evidence: [usageEv], claims: [...quarantinedFindings.map(f => f.claimId), ...[chosenAlt, held].filter((a): a is Alternative => !!a).map(a => a.claimId)], producedBy: AGENT, source: ctx.by(AGENT),
+      confidence: 0.95, evidence: [usageEv, ...deps], claims: [...crosswalk.mappings.map(m => m.claimId), ...quarantinedFindings.map(f => f.claimId), ...[chosenAlt, held].filter((a): a is Alternative => !!a).map(a => a.claimId)], producedBy: AGENT, source: ctx.by(AGENT),
     });
     ctx.trace.emit("claim", AGENT, claim.statement, { claim: claim.id, recommendation });
     return { item_id: itemId, description: item.description, unit: item.unit_of_issue, onHand, quarantined, expiredRecalled, usable, avgDaily, daysBefore: days(onHand, avgDaily), daysAfter: days(usable, avgDaily), openPOs, ownShortage, locations, alternatives, useNow, recommendation, claimId: claim.id };
   }))).sort((a, b) => a.item_id.localeCompare(b.item_id));
+  const active = new Set(results.flatMap(r => [r.claimId, ...r.alternatives.map(a => a.claimId)]));
+  for (const c of ctx.tm.claims().filter(c => ["supply", "alternative"].includes(c.kind) && c.key.split(":")[1] === ex.recall.recall_number && !active.has(c.id))) await ctx.tm.retractClaim(c.key, "product no longer in supply review", ctx.by(AGENT));
   ctx.trace.emit("agent-end", AGENT, results.map(r => `${r.item_id}: ${r.daysBefore ?? "n/a"} -> ${r.daysAfter ?? "n/a"} days`).join("; "));
   return results;
 }

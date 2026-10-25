@@ -1,51 +1,102 @@
+import { forAgent } from "./context.ts";
 // The watcher: are yesterday's answers still true? For every recall case Lotline has
-// worked, it re-reads the evidence those conclusions rest on (the recall as revised by the
-// change feed, and the lots on hand), records it in the World Model, and asks truth
+// worked, it re-reads the source projections and query sets those conclusions rest on,
+// records changes and missing rows in the World Model, and asks truth
 // maintenance which claims are now stale and why. Only the stale cases are re-derived, and
 // the new packet is diffed against the last one, so the buyer sees exactly what changed.
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { ROOT } from "./env.ts";
-import { asText } from "./data/dialect.ts";
+import { asText, lit, ident, ndcExpr, NDC_TRANSFORMS, type NdcTransform } from "./data/dialect.ts";
 import type { RunContext } from "./context.ts";
 import { loadRecall, recallEvidenceRow } from "./agents/exposure.ts";
 import type { Packet } from "./agents/reporter.ts";
 import type { StaleReason } from "../engines/world-model/src/index.ts";
 
+import { projections, queryEvidenceRow, usageEvidenceRow, probeEvidenceRow } from "./evidence.ts";
+import { canonicalJson } from "../engines/world-model/src/stableIds.ts";
+
 const AGENT = "watcher";
 
-export type StaleCase = { recall: string; staleClaims: { key: string; statement: string; reasons: StaleReason[] }[]; changedEvidence: string[] };
+export type EvidenceChange = { id: string; table: string; key: string; changes: Record<string, { before: unknown; after: unknown }>; missing: boolean };
+export type StaleCase = { recall: string; staleClaims: { key: string; statement: string; reasons: StaleReason[] }[]; changedEvidence: EvidenceChange[] };
 
 export async function detectChanges(ctx: RunContext): Promise<StaleCase[]> {
+  ctx = forAgent(ctx, AGENT);
   const worked = ctx.tm.claims({ kind: "lot-constraints" }).map(c => c.subject);
-  ctx.trace.emit("agent-start", AGENT, `re-checking the evidence behind ${worked.length} recall case(s): ${worked.join(", ") || "none"}`);
-  const changed: string[] = [];
-  for (const rn of worked) {
-    const recall = await loadRecall(ctx, rn);
-    if (!recall) continue;
-    const ev = await ctx.tm.observeEvidence({ table: "fda_snapshot.recalls", key: rn, row: recallEvidenceRow(recall), source: ctx.by(AGENT) });
-    if (ev.changed) { changed.push(ev.id); ctx.trace.emit("invalidation", AGENT, `${rn} text changed${recall.updated_from ? ` (${recall.updated_from})` : ""}: code_info is now "${recall.code_info}"`); }
+  ctx.trace.emit("agent-start", AGENT, `re-checking source evidence for ${worked.length} recall case(s)`);
+  const changed: EvidenceChange[] = [];
+  const q = (sql: string) => ctx.backend.query(sql, { agent: AGENT, purpose: "refresh recorded evidence", trace: ctx.trace });
+  // Snapshot the entity list: refreshing must not recursively discover new evidence.
+  for (const e of ctx.world.view("graph").query({ type: "evidence" })) {
+    if (!ctx.tm.dependents(e.id).length) continue;
+    const table = String(e.attrs.table), key = String(e.attrs.key);
+    const old = e.attrs.row as Record<string, unknown>;
+    let row: Record<string, unknown> | null;
+    try {
+      if (key.startsWith("query:") && typeof old.sql === "string") {
+        row = queryEvidenceRow(table, old.sql, await q(old.sql));
+      } else if (table === "fda_snapshot.recalls") {
+        const recall = await loadRecall(ctx, key, AGENT);
+        row = recall ? recallEvidenceRow(recall) : null;
+      } else if (table === "hospital.dispensing_daily") {
+        const [item, , today] = key.split(":");
+        const since = new Date(Date.parse(today) - 30 * 86400000).toISOString().slice(0, 10);
+        const rows = await q(`SELECT sum(units) AS units FROM hospital.dispensing_daily WHERE item_id = ${lit(item)} AND day > cast(${lit(since)} as date) AND day <= cast(${lit(today)} as date)`);
+        row = usageEvidenceRow(rows[0] ?? {});
+      } else if (table === "probe.ndc_overlap") {
+        const match = /^(.+\..+)\.([^.:]+):([^:]+)$/.exec(key);
+        if (!match || !NDC_TRANSFORMS.includes(match[3] as NdcTransform)) throw new Error("unrecognized overlap probe");
+        const [, source, column, transform] = match;
+        const matched = (await q(`SELECT count(DISTINCT i.ndc11) n FROM hospital.item_master i JOIN ${ident(source)} s ON i.ndc11 = ${ndcExpr(ctx.backend.dialect, `s.${ident(column)}`, transform as NdcTransform)}`))[0]?.n;
+        const total = (await q("SELECT count(DISTINCT ndc11) n FROM hospital.item_master"))[0]?.n;
+        row = probeEvidenceRow({ matched, total });
+      } else {
+        const keyColumn: Record<string, string> = { "hospital.inventory_lots": "lot_row_id", "hospital.item_master": "item_id", "fda_snapshot.ndc_packages": "package_ndc", "fda_snapshot.shortages": "package_ndc", "fda_live_views.shortages": "package_ndc", "wholesaler.catalog": "ndc_numeric", "hospital.purchase_orders": "po_number" };
+        if (!keyColumn[table] || !projections[table]) throw new Error(`unsupported evidence kind ${table}`);
+        const rows = await q(`SELECT * FROM ${ident(table)} WHERE ${asText(ctx.backend.dialect, keyColumn[table])} = ${lit(key)}`);
+        row = rows.length ? projections[table](rows[0]) : null;
+      }
+    } catch (err) {
+      // A failed read is unknown, never a deletion or a successful freshness check.
+      ctx.trace.emit("error", AGENT, `could not refresh ${table}#${key}`, { error: (err as Error).message });
+      throw err;
+    }
+    const didChange = row === null
+      ? await ctx.tm.markEvidenceMissing(e.id, ctx.by(AGENT))
+      : (await ctx.tm.observeEvidence({ table, key, row, source: ctx.by(AGENT) })).changed;
+    if (didChange) {
+      const changes = Object.fromEntries([...new Set([...Object.keys(old), ...Object.keys(row ?? {})])].filter(k => canonicalJson(old[k] ?? null) !== canonicalJson(row?.[k] ?? null)).map(k => [k, { before: old[k] ?? null, after: row?.[k] ?? null }]));
+      changed.push({ id: e.id, table, key, changes, missing: row === null });
+      ctx.trace.emit("invalidation", AGENT, `${table}#${key}: ${row === null ? "evidence missing" : `changed ${Object.keys(changes).join(", ")}`}`, { evidence: changed.at(-1) });
+    }
   }
-  const d = ctx.backend.dialect;
-  const lots = await ctx.backend.query(`SELECT ${asText(d, "lot_row_id")} AS lot_row_id, item_id, location_code, lot_number, ${asText(d, "expiry_date")} AS expiry_date, ${asText(d, "qty_units")} AS qty_units, po_number FROM hospital.inventory_lots`, { agent: AGENT, purpose: "re-read lots on hand", trace: ctx.trace });
-  const known = new Set(ctx.world.view("graph").query({ type: "evidence" }).map(e => e.id));
-  for (const l of lots) {
-    const id = `evidence:zetaris:hospital.inventory_lots#${l.lot_row_id}`;
-    if (!known.has(id)) continue; // only lots an earlier conclusion actually used
-    const ev = await ctx.tm.observeEvidence({ table: "hospital.inventory_lots", key: l.lot_row_id!, row: { ...l, qty_units: Number(l.qty_units) }, source: ctx.by(AGENT) });
-    if (ev.changed) { changed.push(ev.id); ctx.trace.emit("invalidation", AGENT, `lot row ${l.lot_row_id} (${l.location_code} ${l.lot_number}) changed: now ${l.qty_units} units`); }
-  }
-  const stale = ctx.tm.staleClaims();
   const byRecall = new Map<string, StaleCase>();
-  for (const s of stale) {
+  for (const s of ctx.tm.staleClaims()) {
     const rn = s.claim.key.split(":")[1] ?? "";
     if (!worked.includes(rn)) continue;
-    const entry = byRecall.get(rn) ?? { recall: rn, staleClaims: [], changedEvidence: changed };
+    const entry = byRecall.get(rn) ?? { recall: rn, staleClaims: [], changedEvidence: [] };
     entry.staleClaims.push({ key: s.claim.key, statement: s.claim.statement, reasons: s.reasons });
     byRecall.set(rn, entry);
   }
-  for (const c of byRecall.values()) ctx.trace.emit("invalidation", AGENT, `${c.recall}: ${c.staleClaims.length} conclusion(s) now stale (${c.staleClaims.slice(0, 4).map(s => s.key).join(", ")}${c.staleClaims.length > 4 ? ", ..." : ""})`, { stale: c.staleClaims });
-  ctx.trace.emit("agent-end", AGENT, byRecall.size ? `${byRecall.size} case(s) need re-deriving` : `${changed.length} evidence change(s); every conclusion still holds`);
+  for (const c of byRecall.values()) {
+    c.changedEvidence = changed.filter(e => ctx.tm.dependents(e.id).some(cl => cl.key.split(":")[1] === c.recall));
+    // A prior poll may have refreshed evidence before failing or before re-derivation.
+    // Preserve its source identity and recorded/current hashes in the case report.
+    const addReasons = (reasons: StaleReason[]) => {
+      for (const reason of reasons) {
+        if (reason.kind === "claim-stale") { addReasons(reason.because); continue; }
+        if (reason.kind !== "evidence-changed" && reason.kind !== "evidence-missing") continue;
+        if (c.changedEvidence.some(e => e.id === reason.dependency)) continue;
+        const entity = ctx.world.view("graph").entity(reason.dependency);
+        if (entity?.type !== "evidence") continue;
+        c.changedEvidence.push({ id: reason.dependency, table: String(entity.attrs.table), key: String(entity.attrs.key), missing: reason.kind === "evidence-missing", changes: reason.kind === "evidence-changed" ? { hash: { before: reason.recordedHash, after: reason.currentHash } } : { present: { before: true, after: false } } });
+      }
+    };
+    for (const claim of c.staleClaims) addReasons(claim.reasons);
+    ctx.trace.emit("invalidation", AGENT, `${c.recall}: ${c.staleClaims.length} conclusion(s) stale`, { stale: c.staleClaims, changedEvidence: c.changedEvidence });
+  }
+  ctx.trace.emit("agent-end", AGENT, `${byRecall.size} case(s) need re-deriving`);
   return [...byRecall.values()];
 }
 

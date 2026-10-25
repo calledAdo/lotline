@@ -97,3 +97,20 @@ test("a torn final line (crash mid-append) loses only that event", async () => {
   assert.equal(reloaded.events().length, count);
   assert.equal(reloaded.stateShapeCanonical(), live.stateShapeCanonical());
 });
+
+test("missing evidence persists across replay and restoration stales its dependents", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lotline-missing-"));
+  const world = new WorldModel({ storage: "local", namespace: "missing-test", directory: dir });
+  const tm = new TruthMaintenance(world);
+  const source = { kind: "agent" as const, by: "test", at: "2026-10-25T00:00:00Z" };
+  const ev = await tm.observeEvidence({ table: "stock", key: "deleted", row: { qty: 4 }, source });
+  const claim = await tm.assertClaim({ key: "stock-claim", kind: "stock", subject: "deleted", statement: "4", evidence: [ev.id], confidence: 1, producedBy: "test", source });
+  await tm.markEvidenceMissing(ev.id, source);
+  assert.deepEqual(tm.staleness(claim.id).reasons.map(r => r.kind), ["evidence-missing"]);
+  const replay = new WorldModel({ storage: "local", namespace: "missing-test", directory: dir });
+  const restored = new TruthMaintenance(replay);
+  assert.deepEqual(restored.staleness(claim.id).reasons.map(r => r.kind), ["evidence-missing"]);
+  await restored.observeEvidence({ table: "stock", key: "deleted", row: { qty: 5 }, source });
+  assert.deepEqual(restored.staleness(claim.id).reasons.map(r => r.kind), ["evidence-changed"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

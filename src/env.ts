@@ -35,5 +35,9 @@ const secretValues = () =>
     .map(([, v]) => v as string);
 
 export function redact(text: string): string {
-  return secretValues().reduce((t, v) => t.replaceAll(v, "***"), text);
+  let masked = secretValues().reduce((t, v) => t.replaceAll(v, "***"), text);
+  for (const [key, value] of Object.entries(env)) {
+    if (/^ZETARIS_[A-Z]+_USER$/.test(key) && value && !value.startsWith("your-")) masked = masked.replaceAll(value, "[principal]").replaceAll(value.toUpperCase(), "[principal]");
+  }
+  return masked;
 }

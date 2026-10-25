@@ -8,7 +8,7 @@ import { ROOT, redact } from "./env.ts";
 export type TraceType =
   | "run-start" | "run-end" | "agent-start" | "agent-end" | "message"
   | "sql" | "llm" | "claim" | "critique" | "revision" | "branch" | "escalation"
-  | "decision" | "fallback" | "error" | "invalidation" | "note";
+  | "policy" | "decision" | "fallback" | "error" | "invalidation" | "note";
 
 export type TraceEvent = { seq: number; t: string; ms: number; type: TraceType; agent: string; summary: string; data?: Record<string, unknown> };
 
