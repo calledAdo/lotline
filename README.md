@@ -108,7 +108,7 @@ Every conclusion references evidence or upstream claim IDs. The packet presents 
 
 **Nightshift and NVIDIA.** All model HTTP requests go through Nightshift's `/chat/completions` provider contract, with bearer authentication and app/scope headers. The fast lane is pinned to `nvidia/nemotron-3.5-lightning-30b-a3b` for crosswalk hypotheses, planning, recall/coverage extraction, alternative selection and verified summary selection. The deep lane is `nvidia/nemotron-3-ultra-550b-a55b` for senior review and adjudication. Structured fast requests disable thinking using `chat_template_kwargs.enable_thinking=false`; Ultra review retains reasoning. Generic routing aliases are deliberately avoided. Each trace records requested/routed model, provider, receipt ID, reported latency, token counts, cost and replay/cache status, including failed attempts where receipt fields can be absent.
 
-See [the standalone sponsor explanation](docs/sponsor-tech.md) and [the measured ablation](eval/results/ablation-2026-10-25.md).
+See [the Zetaris Unified Semantic Layer write-up](docs/zetaris-usl.md) (use case, sources, DDL, live query results, data quality rules, time saved, and a feature requirement), [the standalone sponsor explanation](docs/sponsor-tech.md) and [the measured ablation](eval/results/ablation-2026-10-25.md).
 
 ### Where the engine is used (judges look here)
 
